@@ -49,21 +49,20 @@ MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024   # 15 MB
         422: {"model": ErrorResponse, "description": "Validation error"},
         500: {"model": ErrorResponse, "description": "Internal processing error"},
     },
-    summary="Analyse leaf image → LRTDC colour vector",
+    summary="Analyse leaf image → health verdict, damage breakdown, AI explanation",
     description="""
-Upload a **leaf photograph** (JPEG / PNG / WEBP, ≤ 15 MB).
+Upload a **leaf photograph** (JPEG / PNG / WEBP, ≤ 15 MB). Works best with one
+leaf filling most of the frame.
 
 The service will:
-1. Segment the leaf from the background using GrabCut + HSV masking.
-2. Divide the masked leaf into **five spatial regions**: L (Left), R (Right),
-   T (Top), D (Down), C (Center) — the **LRTDC** scheme.
-3. Sample the dominant colour of each region (leaf pixels only).
-4. Return **compact vector tokens** in the format `(L,#RRGGBB)` … ready to
-   be concatenated and passed to the AI model.
-
-Environmental scalars (`wind_force_ms`, `humidity_pct`, `temperature_c`,
-`sunlight_lux`) are optional but are included verbatim in the `ai_payload`
-field so a single JSON blob can be sent downstream.
+1. Separate the leaf from the background (soil, table, other leaves, shadows).
+2. Measure how much of the **leaf** is healthy, yellow (chlorosis) and brown
+   (dead tissue), and the damage pattern (large patch, spots, edge burn).
+3. Break the leaf into **five regions** — L (Left), R (Right), T (Top),
+   D (Down), C (Center) — with their colour make-up and `(L,#RRGGBB)` vector.
+4. Pick a rule-based recommendation using the optional weather inputs
+   (`wind_force_ms`, `humidity_pct`, `temperature_c`, `sunlight_lux`).
+5. Have the AI explain it to the farmer in the selected language.
 """,
 )
 async def analyze_leaf_endpoint(

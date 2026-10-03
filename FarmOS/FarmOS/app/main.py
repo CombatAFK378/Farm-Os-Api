@@ -42,7 +42,8 @@ def create_app() -> FastAPI:
 
     # ── Health check ───────────────────────────────────────────────────────
     # HEAD too: uptime monitors (e.g. UptimeRobot) often probe with HEAD
-    @app.api_route("/health", methods=["GET", "HEAD"], tags=["System"])
+    @app.get("/health", tags=["System"])
+    @app.head("/health", include_in_schema=False)
     async def health() -> dict:
         return {"status": "ok", "version": settings.app_version}
 

@@ -60,12 +60,25 @@ Router prefix: `/analyze`
   "image_width": 0,
   "image_height": 0,
   "total_pixels": 0,
+  "leaf_pixel_count": 0,
   "green_pixel_count": 0,
   "green_ratio": 0.0,
+  "yellow_ratio": 0.0,
+  "brown_ratio": 0.0,
   "is_healthy": true,
   "health_label": "healthy",
   "health_status": "HEALTHY",
+  "health_score": 0.0,
+  "severity": 1,
+  "detected_issues": ["..."],
   "recommendation": "...",
+  "regions": {
+    "L": {"hex_color": "#5A7A3B", "green_ratio": 0.0, "yellow_ratio": 0.0, "brown_ratio": 0.0, "coverage_ratio": 0.0},
+    "R": {}, "T": {}, "D": {}, "C": {}
+  },
+  "lrtdc_vector": "(L,#5A7A3B)(R,#...)(T,#...)(D,#...)(C,#...)",
+  "health_summary": {"health_score": 0.0, "health_label": "healthy", "greenness_pct": 0.0,
+                     "yellowing_pct": 0.0, "necrosis_pct": 0.0, "recommendation": "..."},
   "wind_force_ms": 0.0,
   "humidity_pct": 0.0,
   "temperature_c": 0.0,
@@ -80,9 +93,13 @@ Router prefix: `/analyze`
 ```
 
 **Notes on response fields**
-- `green_ratio` is a fraction (0–1) of green pixels in the image.
-- `is_healthy` is true when `green_ratio >= 0.40`.
+- The leaf is separated from the background first; `green_ratio`, `yellow_ratio` and `brown_ratio` are fractions (0–1) of the **leaf**, not the whole photo (green = healthy, yellow = chlorosis, brown = dead tissue).
+- `is_healthy` is false when yellow + brown ≥ 7% of the leaf, or there is a distinct brown lesion (≥ 2.5% brown with one patch ≥ 1% of the leaf or ≥ 10 spots).
+- `health_score` is 0–100 (≥ 80 healthy, 50–80 needs attention, < 50 critical); `severity` is 1–5.
+- `detected_issues` lists findings such as "large brown dead patch (~19% of the leaf)"; `regions` breaks the leaf into L/R/T/D/C.
+- `health_summary` repeats the main values grouped, for app versions that read it.
 - `health_label` is one of `healthy`, `not_healthy`.
+- Works best with one leaf filling most of the frame; whole-plant or very cluttered photos are less reliable.
 - `AIexplanation` comes from Groq; it falls back to the rule-based recommendation if the Groq call fails.
 - `fallback_used` is true when `AIexplanation` is the rule-based fallback rather than AI text.
 
