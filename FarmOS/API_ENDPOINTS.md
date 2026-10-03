@@ -117,6 +117,8 @@ Error schema (as declared):
 
 Router prefix: `/groundwater`
 
+Groundwater stats and maps are cached in memory per ~5 km map tile, so repeat requests for the same farm (including `/analyze/leaf` with coordinates) skip the satellite download. One `/groundwater/analyze` call also caches the map for the `map_image_url` it returns. The cache resets when the server restarts.
+
 ### POST /groundwater/analyze
 
 **Purpose**: Returns groundwater potential stats and an AI explanation for the provided coordinates.
@@ -155,16 +157,16 @@ Router prefix: `/groundwater`
 
 ### GET /groundwater/map
 
-**Purpose**: Returns a PNG map for the provided coordinates.
+**Purpose**: Returns a JPEG satellite map (~0.5 MB) for the provided coordinates.
 
 **Query parameters**
 - `latitude` (float, required): Range -90 to 90.
 - `longitude` (float, required): Range -180 to 180.
 
-**Response (200, image/png)**
-- PNG bytes streamed.
+**Response (200, image/jpeg)**
+- JPEG bytes.
 - Response headers include:
-  - `Content-Disposition: inline; filename="gw_map_<lat>_<lon>.png"`
+  - `Content-Disposition: inline; filename="gw_map_<lat>_<lon>.jpg"`
   - `X-Latitude: <lat>`
   - `X-Longitude: <lon>`
 

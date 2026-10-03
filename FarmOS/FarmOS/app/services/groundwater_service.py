@@ -5,7 +5,9 @@ from __future__ import annotations
 import io
 import logging
 import math
+import threading
 import urllib.request
+from collections import OrderedDict
 from typing import Optional
 
 import numpy as np
@@ -16,6 +18,10 @@ from scipy.ndimage import gaussian_filter
 from app.services.groq_service import call_groq
 
 logger = logging.getLogger(__name__)
+
+MAP_ZOOM     = 13
+MAP_RADIUS   = 2      # 5x5 tiles around the farm (~24 km across at zoom 13)
+JPEG_QUALITY = 85     # source tiles are JPEG already; PNG was ~6x larger for no gain
 
 
 # ---------------------------------------------------------------------------
@@ -39,8 +45,14 @@ def _fetch_tile(x: int, y: int, zoom: int) -> Image.Image:
         return Image.open(BytesIO(resp.read())).convert("RGB")
 
 
-def fetch_terrain_image(lat: float, lon: float, zoom: int = 13, radius: int = 2) -> Image.Image:
-    cx, cy = _deg2tile(lat, lon, zoom)
+def _fetch_mosaic(
+    cx: int, cy: int, zoom: int = MAP_ZOOM, radius: int = MAP_RADIUS
+) -> tuple[Image.Image, bool]:
+    """
+    Stitch the tiles around tile (cx, cy). Returns (image, complete) —
+    complete is False if any tile failed and was replaced by a placeholder.
+    """
+    complete = True
     tiles = []
     for dy in range(-radius, radius + 1):
         row = []
@@ -49,6 +61,7 @@ def fetch_terrain_image(lat: float, lon: float, zoom: int = 13, radius: int = 2)
                 tile = _fetch_tile(cx + dx, cy + dy, zoom)
             except Exception:
                 tile = Image.new("RGB", (256, 256), (150, 130, 110))
+                complete = False
             row.append(tile)
         tiles.append(row)
 
@@ -58,16 +71,70 @@ def fetch_terrain_image(lat: float, lon: float, zoom: int = 13, radius: int = 2)
     for r, row in enumerate(tiles):
         for c, tile in enumerate(row):
             stitched.paste(tile, (c * 256, r * 256))
-    return stitched
+    return stitched, complete
+
+
+# ---------------------------------------------------------------------------
+# Per-location cache
+# ---------------------------------------------------------------------------
+# Results depend only on which zoom-13 tile the coordinates fall in (the
+# mosaic is built around it), so that tile is the cache key: every request
+# from the same ~5 km tile reuses one entry. Results built from placeholder
+# tiles (a download failed) are never cached, so a network blip can't stick.
+
+class _LRUCache:
+    """Small thread-safe LRU cache — requests run on worker threads."""
+
+    def __init__(self, maxsize: int) -> None:
+        self._data: OrderedDict = OrderedDict()
+        self._maxsize = maxsize
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            if key not in self._data:
+                return None
+            self._data.move_to_end(key)
+            return self._data[key]
+
+    def put(self, key, value) -> None:
+        with self._lock:
+            self._data[key] = value
+            self._data.move_to_end(key)
+            if len(self._data) > self._maxsize:
+                self._data.popitem(last=False)
+
+
+_potential_cache = _LRUCache(maxsize=2048)   # small dicts
+_map_cache       = _LRUCache(maxsize=32)     # ~0.5 MB JPEG each, ~16 MB max
+
+
+def _analyse_tile(tile: tuple[int, int]) -> tuple[dict, bytes]:
+    """Download the mosaic once and build both the groundwater breakdown and the map JPEG."""
+    img, complete = _fetch_mosaic(*tile)
+    potential = _potential_breakdown(classify_terrain(np.array(img)))
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=JPEG_QUALITY)
+    jpeg = buf.getvalue()
+
+    if complete:
+        _potential_cache.put(tile, potential)
+        _map_cache.put(tile, jpeg)
+    else:
+        logger.warning("Some satellite tiles failed for tile %s; result not cached", tile)
+    return potential, jpeg
 
 
 def generate_map(lat: float, lon: float) -> bytes:
-    """Fetch satellite tiles and return stitched PNG bytes. No overlays."""
-    img   = fetch_terrain_image(lat, lon, zoom=13, radius=2)
-    buf   = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return buf.read()
+    """Return the stitched satellite mosaic around the farm as JPEG bytes. No overlays."""
+    tile = _deg2tile(lat, lon, MAP_ZOOM)
+    jpeg = _map_cache.get(tile)
+    if jpeg is None:
+        _, jpeg = _analyse_tile(tile)
+    else:
+        logger.info("Map cache hit for tile %s", tile)
+    return jpeg
 
 
 def classify_terrain(img_arr: np.ndarray) -> np.ndarray:
@@ -103,20 +170,28 @@ def classify_terrain(img_arr: np.ndarray) -> np.ndarray:
     return gaussian_filter(gw, sigma=6)
 
 
+def _potential_breakdown(gw_score: np.ndarray) -> dict:
+    total = gw_score.size
+    return {
+        "very_high_pct": round(float(np.sum(gw_score > 0.85)                         / total * 100), 2),
+        "high_pct":      round(float(np.sum((gw_score > 0.70) & (gw_score <= 0.85)) / total * 100), 2),
+        "medium_pct":    round(float(np.sum((gw_score > 0.45) & (gw_score <= 0.70)) / total * 100), 2),
+        "low_pct":       round(float(np.sum((gw_score > 0.20) & (gw_score <= 0.45)) / total * 100), 2),
+        "very_low_pct":  round(float(np.sum(gw_score <= 0.20)                       / total * 100), 2),
+    }
+
+
 def get_groundwater_stats(lat: float, lon: float) -> dict:
-    img_arr  = np.array(fetch_terrain_image(lat, lon, zoom=13, radius=2))
-    gw_score = classify_terrain(img_arr)
-    total    = gw_score.size
+    tile      = _deg2tile(lat, lon, MAP_ZOOM)
+    potential = _potential_cache.get(tile)
+    if potential is None:
+        potential, _ = _analyse_tile(tile)
+    else:
+        logger.info("Groundwater cache hit for tile %s", tile)
     return {
         "lat": lat,
         "lon": lon,
-        "groundwater_potential": {
-            "very_high_pct": round(float(np.sum(gw_score > 0.85)                         / total * 100), 2),
-            "high_pct":      round(float(np.sum((gw_score > 0.70) & (gw_score <= 0.85)) / total * 100), 2),
-            "medium_pct":    round(float(np.sum((gw_score > 0.45) & (gw_score <= 0.70)) / total * 100), 2),
-            "low_pct":       round(float(np.sum((gw_score > 0.20) & (gw_score <= 0.45)) / total * 100), 2),
-            "very_low_pct":  round(float(np.sum(gw_score <= 0.20)                       / total * 100), 2),
-        },
+        "groundwater_potential": dict(potential),   # copy so callers can't mutate the cache
     }
 
 

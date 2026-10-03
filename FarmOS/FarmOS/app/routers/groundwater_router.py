@@ -1,12 +1,11 @@
 
 from __future__ import annotations
 
-import io
 import logging
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Form, status
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.concurrency import run_blocking
 from app.services.groundwater_service import (
@@ -65,7 +64,7 @@ async def analyze_groundwater(
         )
 
         # 3. Assemble JSON response — stats + AIexplanation only
-        #    To get the PNG map image call: GET /groundwater/map?latitude=..&longitude=..
+        #    To get the JPEG map image call: GET /groundwater/map?latitude=..&longitude=..
         response = {
             "lat":                   stats["lat"],
             "lon":                   stats["lon"],
@@ -87,15 +86,15 @@ async def analyze_groundwater(
 
 
 # ---------------------------------------------------------------------------
-# GET /groundwater/map  — returns PNG image
+# GET /groundwater/map  — returns JPEG image
 # ---------------------------------------------------------------------------
 
 @router.get(
     "/map",
-    summary="Groundwater potential map image (PNG)",
-    response_description="PNG satellite + groundwater overlay map",
+    summary="Groundwater potential map image (JPEG)",
+    response_description="JPEG satellite map",
     responses={
-        200: {"content": {"image/png": {}}, "description": "Groundwater map PNG"},
+        200: {"content": {"image/jpeg": {}}, "description": "Groundwater map JPEG"},
         500: {"description": "Map generation failed"},
     },
 )
@@ -104,7 +103,7 @@ async def get_groundwater_map(
     longitude: float = Query(..., ge=-180, le=180, description="Longitude (e.g. 73.85)"),
 ):
     """
-    Returns a professional groundwater potential map PNG for the given coordinates.
+    Returns a groundwater potential map JPEG for the given coordinates.
 
     Example:
     ```
@@ -122,11 +121,13 @@ async def get_groundwater_map(
             detail=f"Map generation failed: {exc}",
         )
 
-    return StreamingResponse(
-        io.BytesIO(image_bytes),
-        media_type="image/png",
+    # Plain Response, not StreamingResponse: iterating a BytesIO splits binary
+    # data on every newline byte (~11k tiny chunks per map), which cost ~2 CPU-s.
+    return Response(
+        content=image_bytes,
+        media_type="image/jpeg",
         headers={
-            "Content-Disposition": f'inline; filename="gw_map_{latitude}_{longitude}.png"',
+            "Content-Disposition": f'inline; filename="gw_map_{latitude}_{longitude}.jpg"',
             "X-Latitude":  str(latitude),
             "X-Longitude": str(longitude),
         },
