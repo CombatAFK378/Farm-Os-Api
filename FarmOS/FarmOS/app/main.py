@@ -41,7 +41,8 @@ def create_app() -> FastAPI:
     app.include_router(groundwater_router.router)
 
     # ── Health check ───────────────────────────────────────────────────────
-    @app.get("/health", tags=["System"])
+    # HEAD too: uptime monitors (e.g. UptimeRobot) often probe with HEAD
+    @app.api_route("/health", methods=["GET", "HEAD"], tags=["System"])
     async def health() -> dict:
         return {"status": "ok", "version": settings.app_version}
 
