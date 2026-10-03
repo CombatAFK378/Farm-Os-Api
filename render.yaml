@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: farmos-api
+    runtime: python
+    # free = sleeps after 15 min idle (~1 min wake-up), 0.1 CPU.
+    # Change to 0.5c-512mb (Starter, $7/mo) for demos / real users.
+    plan: free
+    region: singapore
+    rootDir: FarmOS/FarmOS
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Render defaults new services to Python 3.14, which the pinned
+      # pydantic version doesn't support — keep this pinned.
+      - key: PYTHON_VERSION
+        value: 3.13.6
+      # Entered in the Render dashboard when the Blueprint is created.
+      - key: GROQ_API_KEY
+        sync: false
